@@ -18,6 +18,8 @@ module Page
     link(:stop_masquerading_link, class: 'stop_masquerading')
     h2(:recent_activity_heading, xpath: '//h2[contains(text(),"Recent Activity")]')
 
+    h2(:unauthorized_msg, xpath: '//h2[contains(text(),"Unauthorized")]')
+
     # Loads the Canvas homepage
     def load_homepage
       logger.info "Loading Canvas homepage at #{Utils.canvas_base_url}"
@@ -47,12 +49,13 @@ module Page
     # Masquerades as a user and then loads a course site
     # @param user [User]
     # @param course [Course]
-    def masquerade_as(user, course)
-      logger.info "Masquerading as #{user.role} #{user.username}"
+    def masquerade_as(user, course = nil)
+      stop_masquerading if stop_masquerading_link?
+      logger.info "Masquerading as #{user.role} UID #{user.uid}"
       navigate_to "#{Utils.canvas_base_url}/users/#{user.canvas_id.to_s}/masquerade"
       wait_for_page_load_and_click masquerade_link_element
       stop_masquerading_link_element.when_visible
-      load_course_site course
+      load_course_site course unless course.nil?
     end
 
     # Quits masquerading as another user
@@ -71,9 +74,12 @@ module Page
     # Hides the footer element in order to interact with elements hidden beneath it. Clicks once to set focus on the footer
     # and once again to hide it.
     def hide_footer
-      footer_element.click
-      sleep 1
-      footer_element.click
+      footer_element.when_present Utils.short_wait
+      if footer_element.visible?
+        footer_element.click
+        sleep 1
+        footer_element.click
+      end
     end
 
     # COURSE SITE SETUP
@@ -93,16 +99,20 @@ module Page
 
     select_list(:enrollment_roles, name: 'enrollment_role_id')
     link(:add_people_button, id: 'addUsers')
+    link(:find_person_to_add_link, xpath: '//a[contains(.,"Find a Person to Add")]')
     text_area(:user_list, id: 'user_list_textarea')
     select_list(:user_role, id: 'role_id')
     button(:next_button, id: 'next-step')
     button(:add_button, id: 'createUsersAddButton')
     paragraph(:add_users_success, xpath: '//p[contains(.,"The following users have been enrolled")]')
+    li(:remove_user_success, xpath: '//li[contains(.,"User successfully removed")]')
     button(:done_button, xpath: '//button[contains(.,"Done")]')
     td(:default_email, xpath: '//th[text()="Default Email:"]/following-sibling::td')
     link(:edit_user_link, xpath: '//a[@class="edit_user_link"]')
     text_area(:user_email, id: 'user_email')
     button(:update_details_button, xpath: '//button[text()="Update Details"]')
+
+    text_area(:search_user_input, xpath: '//input[@placeholder="Search people"]')
 
     div(:publish_div, id: 'course_status_actions')
     button(:publish_button, class: 'btn-publish')
@@ -132,7 +142,7 @@ module Page
         check_terms_cbx
         submit_button
       end
-      recent_activity_heading_element.when_visible
+      div_element(id: 'content').when_visible Utils.medium_wait
       if accept_course_invite?
         logger.info 'Accepting course invite'
         accept_course_invite
@@ -194,6 +204,82 @@ module Page
       end
     end
 
+    # Removes a user from a course site
+    # @param course [Course]
+    # @param user [User]
+    def remove_user_from_course(course, user)
+      logger.info "Removing #{user.role} UID #{user.uid} from course site ID #{course.site_id}"
+      load_users_page course
+      hide_footer
+      # Scroll down a few times until the user appears on the page
+      begin
+        tries ||= 5
+        scroll_to_bottom
+        (link = link_element(xpath: "//tr[@id='user_#{user.canvas_id}']//a[contains(@class,'al-trigger')]")).when_present 1
+      rescue
+        retry unless (tries -=1).zero?
+      end
+      wait_for_page_update_and_click link
+      confirm(true) { wait_for_page_update_and_click link_element(xpath: "//tr[@id='user_#{user.canvas_id}']//a[@data-event='removeFromCourse']") }
+      remove_user_success_element.when_visible Utils.short_wait
+    end
+
+    # Searches for a user by Canvas user ID
+    # @param user [User]
+    def search_user_by_canvas_id(user)
+      wait_for_element_and_type(search_user_input_element, user.canvas_id)
+      sleep 1
+    end
+
+    # Returns the UID displayed for a user on a course site roster
+    # @param canvas_id [Integer]
+    # @return [String]
+    def roster_user_uid(canvas_id)
+      cell_element(xpath: "//tr[contains(@id,'#{canvas_id}')]/td[3]").text
+    end
+
+    # Returns the text in the table cell containing a user's enrolled section codes
+    # @param canvas_id [Integer]
+    # @return [String]
+    def roster_user_sections(canvas_id)
+      cell_element(xpath: "//tr[contains(@id,'#{canvas_id}')]/td[5]").text
+    end
+
+    # Returns the text in the table cell containing a user's roles
+    # @param canvas_id [Integer]
+    # @return [String]
+    def roster_user_roles(canvas_id)
+      cell_element(xpath: "//tr[contains(@id,'#{canvas_id}')]/td[6]").text
+    end
+
+    # Clicks the Canvas Add People button followed by the Find a Person to Add button and switches to the LTI tool
+    # @param driver [Selenium::WebDriver]
+    def click_find_person_to_add(driver)
+      logger.debug 'Clicking Find a Person to Add button'
+      wait_for_page_load_and_click add_people_button_element
+      wait_for_page_load_and_click find_person_to_add_link_element
+      switch_to_canvas_iframe driver
+    end
+
+    # Waits for a course site's enrollment to finish updating for a given set of user roles and then returns the final count for each role
+    # @param course [Course]
+    # @param roles [Array<String>]
+    # @return [Array<Integer>]
+    def wait_for_enrollment_import(course, roles)
+      enrollment_counts = []
+      roles.each do |role|
+        starting_count = 0
+        ending_count = enrollment_count_by_role(course, role)
+        begin
+          starting_count = ending_count
+          sleep Utils.medium_wait
+          ending_count = enrollment_count_by_role(course, role)
+        end while ending_count > starting_count
+        enrollment_counts << ending_count
+      end
+      enrollment_counts
+    end
+
     # Returns the number of users in a course site with a given role
     # @param course [Course]
     # @param role [String]
@@ -226,6 +312,16 @@ module Page
       end
     end
 
+    # Publishes a course site
+    # @param course [Course]
+    def publish_course_site(course)
+      logger.info 'Publishing the course'
+      load_course_site course
+      publish_div_element.when_visible Utils.short_wait
+      wait_for_page_update_and_click publish_button_element unless published_button?
+      published_button_element.when_visible Utils.medium_wait
+    end
+
     # Creates standard Canvas course site, publishes it, and adds test users.
     # @param course [Course]
     # @param test_users [Array<User>]
@@ -250,11 +346,7 @@ module Page
           update_course_success_element.when_visible Utils.medium_wait
         end
       end
-      logger.info 'Publishing the course'
-      load_course_site course
-      publish_div_element.when_visible Utils.short_wait
-      wait_for_page_update_and_click publish_button_element unless published_button?
-      published_button_element.when_visible Utils.medium_wait
+      publish_course_site course
       logger.info "Course site URL is #{current_url}"
       current_url.sub("#{Utils.canvas_base_url}/courses/", '')
       logger.info "Course ID is #{course.site_id}"
@@ -513,5 +605,18 @@ module Page
       end
       assignment_submission_conf_element.when_visible Utils.long_wait
     end
+
+    # Verifies that the asset file directory on a course site is set to 'hidden' but visible to the right user roles
+    # @param course [Course]
+    # @param user [User]
+    # @return [boolean]
+    def suitec_files_hidden?(course, user)
+      navigate_to "#{Utils.canvas_base_url}/courses/#{course.site_id}/files"
+      div_element(class: 'ef-folder-list').when_visible Utils.medium_wait
+      ['Teacher', 'Lead TA', 'TA', 'Designer', 'Reader'].include?(user.role) ?
+          verify_block { button_element(xpath: '//a[contains(.,"_suitec")]/../following-sibling::div[5]/button[@title="Hidden. Available with a link"]').when_visible Utils.short_wait } :
+          verify_block { div_element(xpath: '//div[contains(.,"This folder is empty")]').when_visible Utils.short_wait }
+    end
+
   end
 end

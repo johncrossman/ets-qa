@@ -154,6 +154,26 @@ class Utils
     @config['canvas']['sub_account']
   end
 
+  # Canvas ID of create course site tool
+  def self.canvas_create_course_site_tool
+    @config['canvas']['create_course_site_tool']
+  end
+
+  # Canvas ID of course add user tool
+  def self.canvas_course_add_user_tool
+    @config['canvas']['course_add_user_tool']
+  end
+
+  # Canvas ID of course captures tool
+  def self.canvas_course_captures_tool
+    @config['canvas']['course_captures_tool']
+  end
+
+  # Canvas ID of roster photos tool
+  def self.canvas_rosters_tool
+    @config['canvas']['rosters_tool']
+  end
+
   # CALCENTRAL
 
   # Base URL of CalCentral test environment
@@ -183,6 +203,10 @@ class Utils
 
   def self.super_admin_password
     @config['users']['super_admin_password']
+  end
+
+  def self.super_admin_uid
+    @config['users']['super_admin_uid']
   end
 
   def self.ets_qa_username
