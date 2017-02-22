@@ -50,6 +50,7 @@ module Page
     # @param user [User]
     # @param course [Course]
     def masquerade_as(user, course = nil)
+      load_homepage
       stop_masquerading if stop_masquerading_link?
       logger.info "Masquerading as #{user.role} UID #{user.uid}"
       navigate_to "#{Utils.canvas_base_url}/users/#{user.canvas_id.to_s}/masquerade"
@@ -99,12 +100,15 @@ module Page
 
     select_list(:enrollment_roles, name: 'enrollment_role_id')
     link(:add_people_button, id: 'addUsers')
+    link(:help_finding_users_link, id: 'add-people-help')
     link(:find_person_to_add_link, xpath: '//a[contains(.,"Find a Person to Add")]')
-    text_area(:user_list, id: 'user_list_textarea')
-    select_list(:user_role, id: 'role_id')
-    button(:next_button, id: 'next-step')
-    button(:add_button, id: 'createUsersAddButton')
-    paragraph(:add_users_success, xpath: '//p[contains(.,"The following users have been enrolled")]')
+    checkbox(:add_user_by_email, xpath: '//span[contains(text(),"Email Address")]/..')
+    checkbox(:add_user_by_uid, xpath: '//span[contains(text(),"Berkeley UID")]/..')
+    checkbox(:add_user_by_sid, xpath: '//span[contains(text(),"Student ID")]/..')
+    text_area(:user_list, xpath: '//textarea')
+    select_list(:user_role, id: 'peoplesearch_select_role')
+    button(:next_button, id: 'addpeople_next')
+    div(:users_ready_to_add_msg, xpath: '//div[contains(text(),"The following users are ready to be added to the course.")]')
     li(:remove_user_success, xpath: '//li[contains(.,"User successfully removed")]')
     button(:done_button, xpath: '//button[contains(.,"Done")]')
     td(:default_email, xpath: '//th[text()="Default Email:"]/following-sibling::td')
@@ -160,7 +164,7 @@ module Page
     # @param test_id [String]
     # @return [String]
     def search_for_course(test_id)
-      tries ||= 3
+      tries ||= 6
       logger.info 'Searching for course site'
       load_sub_account
       search_course_input_element.when_visible timeout=Utils.short_wait
@@ -179,7 +183,8 @@ module Page
     def add_users(course, test_users)
       ['Teacher', 'Designer', 'Lead TA', 'TA', 'Observer', 'Reader', 'Student'].each do |user_role|
         users = ''
-        test_users.each { |user| users << "#{user.uid}, " if user.role == user_role }
+        users_with_role = test_users.select { |user| user.role == user_role }
+        users_with_role.each { |user| users << "#{user.uid}, " }
         if users.empty?
           logger.warn "No test users with role #{user_role}"
         else
@@ -189,14 +194,19 @@ module Page
             logger.info "Adding users with role #{user_role}"
             load_users_page course
             wait_for_page_load_and_click add_people_button_element
-            user_list_element.when_visible Utils.short_wait
-            self.user_list = users
+            add_user_by_uid_element.when_visible Utils.short_wait
+            sleep 1
+            check_add_user_by_uid
+            wait_for_element_and_type(user_list_element, users)
             self.user_role = user_role
             next_button
-            wait_for_page_load_and_click add_button_element
-            add_users_success_element.when_visible Utils.medium_wait
-            done_button
-          rescue
+            users_ready_to_add_msg_element.when_visible Utils.medium_wait
+            hide_footer
+            wait_for_page_update_and_click next_button_element
+            5.times { scroll_to_bottom }
+            users_with_role.each { |user| cell_element(xpath: "//tr[contains(@id,'#{user.canvas_id}')]").when_present Utils.short_wait }
+          rescue => e
+            logger.error "#{e.message}\n#{e.backtrace}"
             logger.warn 'Add User failed, retrying'
             retry unless (tries -=1).zero?
           end
@@ -373,7 +383,9 @@ module Page
 
     # Deletes a course site
     # @param course [Course]
-    def delete_course(course)
+    def delete_course(driver, course)
+      driver.switch_to.default_content
+      stop_masquerading if stop_masquerading_link?
       navigate_to "#{Utils.canvas_base_url}/courses/#{course.site_id}/confirm_action?event=delete"
       wait_for_page_load_and_click delete_course_button_element
       delete_course_success_element.when_visible Utils.medium_wait
@@ -487,10 +499,10 @@ module Page
     link(:primary_html_editor_link, xpath: '//article[@id="discussion_topic"]//a[contains(.,"HTML Editor")]')
     text_area(:primary_reply_input, xpath: '//article[@id="discussion_topic"]//textarea[@class="reply-textarea"]')
     button(:primary_post_reply_button, xpath: '//article[@id="discussion_topic"]//button[contains(.,"Post Reply")]')
-    elements(:secondary_reply_link, :link, xpath: '//li[@class="entry"]//a[@data-event="addReply"]')
-    elements(:secondary_html_editor_link, :link, xpath: '//li[@class="entry"]//a[contains(.,"HTML Editor")]')
-    elements(:secondary_reply_input, :text_area, xpath: '//li[@class="entry"]//textarea[@class="reply-textarea"]')
-    elements(:secondary_post_reply_button, :button, xpath: '//li[@class="entry"]//button[contains(.,"Post Reply")]')
+    elements(:secondary_reply_link, :link, xpath: '//li[contains(@class,"entry")]//span[text()="Reply"]/..')
+    elements(:secondary_html_editor_link, :link, xpath: '//li[contains(@class,"entry")]//a[contains(.,"HTML Editor")]')
+    elements(:secondary_reply_input, :text_area, xpath: '//li[contains(@class,"entry")]//textarea[@class="reply-textarea"]')
+    elements(:secondary_post_reply_button, :button, xpath: '//li[contains(@class,"entry")]//button[contains(.,"Post Reply")]')
 
     # Clicks the 'save and publish' button using JavaScript rather than WebDriver
     def click_save_and_publish

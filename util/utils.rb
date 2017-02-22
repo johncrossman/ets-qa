@@ -174,6 +174,11 @@ class Utils
     @config['canvas']['rosters_tool']
   end
 
+  # Canvas ID of course official sections tool
+  def self.canvas_official_sections_tool
+    @config['canvas']['official_sections_tool']
+  end
+
   # CALCENTRAL
 
   # Base URL of CalCentral test environment
@@ -219,6 +224,14 @@ class Utils
 
   def self.test_user_password
     @config['users']['test_user_password']
+  end
+
+  # SCREENSHOTS
+
+  def self.save_screenshot(driver, unique_id, uid)
+    output_dir = File.join(ENV['HOME'], '/tmp/screenshots')
+    FileUtils.mkdir_p(output_dir) unless File.exists?(output_dir)
+    driver.save_screenshot File.join(output_dir, "#{unique_id}-UID#{uid}.png")
   end
 
 end
